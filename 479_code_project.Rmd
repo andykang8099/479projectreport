@@ -1,0 +1,141 @@
+---
+title: "479project_code"
+output: github_document
+---
+##Group member: Yuzhuo Kang, Mingke Wang, Zhiheng Shao
+
+## The final report is also in this repository called STAT479_project_report
+
+
+### Data cleaning and Data Wrangling
+```{r,message=FALSE,warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(jsonlite)
+dat_url <- "https://covidtracking.com/api/v1/states/daily.json" # API
+seniors <- read.csv("./data/agedata.csv") %>% select(STATEFIP,old)%>%mutate(old=old*100)
+kff=read.csv("./data/kffdata.csv")%>% select(-X)%>%rename(risk=age65risk...100)
+acs=read.csv("./data/acs.csv")%>% select(-X)
+
+# Combining the data
+covid <- merge(fromJSON(dat_url), read.csv("./data/StateName.csv")) %>%
+  mutate(date=as.character(date),
+         date=as.Date(date, format="%Y%m%d"), 
+         daily_positive=positiveIncrease,
+         daily_tested=totalTestResultsIncrease,
+         daily_pos_rate=positiveIncrease/totalTestResultsIncrease*100,
+         death_rate=death/positive*100)
+covid1 <- covid %>% filter(state_name!="US Virgin Islands",state_name!="Northern Mariana Islands",state_name!="American Samoa",state_name!="Guam",state_name!="Puerto Rico") %>% group_by(state_name) %>% arrange(date) %>% mutate(Cumulative_positive=positive, Cumulative_tested=totalTestResults) %>%
+  mutate(cum_pos_rate=Cumulative_positive/Cumulative_tested*100)%>%mutate(fips=as.numeric(fips))
+  
+# Filter the data to focus on May 1st data
+covid2=covid1%>%filter(date=="2020-05-01")%>%left_join(seniors,by=c("fips"="STATEFIP"))
+covid3 <- covid2 %>% left_join(acs,by=c("fips"="STATEFIP"))
+
+covid4=covid3%>%select(date,state_name,death_rate,old,cum_pos_rate,metrocity,age25,ins)
+covid5=covid4%>%left_join(kff,by="state_name")
+# Set extreme value to missing NA
+covid5$metrocity[covid5$metrocity==0]=NA
+# Sample statistics of two variables
+mean(covid5$death_rate)
+mean(covid5$old)
+sd(covid5$death_rate)
+sd(covid5$old)
+
+```
+
+
+# Conduct Linear Regression Model
+```{r,message=FALSE,warning=FALSE}
+model1 <- lm(death_rate~old+cum_pos_rate+metrocity+age25+hospbed+risk+ins,data=covid5)
+summary(model1)
+
+# Model diagnostics
+par(mfrow = c(2, 2), oma = c(0, 0, 2, 0))
+plot(model1)
+
+```
+
+
+
+# Plotting the death vs Age using scatterplot
+```{r,message=FALSE,warning=FALSE}
+library(ggplot2)
+
+ggplot(covid5, aes(x = old, y = death_rate)) + 
+  geom_point() +
+  stat_smooth(col ="red", se=FALSE)+
+  labs(x = "Proportion aged 65 or older", y = "Death Rate",
+       title = "Death rate and propotion of older people with loess method")
+
+ggplot(covid5, aes(x = old, y = death_rate)) + 
+  geom_point() +
+  stat_smooth(col ="red", se=FALSE,method="gam")+
+  labs(x = "Proportion aged 65 or older", y = "Death Rate",
+       title = "Death rate and propotion of older people with gam method")
+
+ggplot(covid5, aes(x = age25, y = death_rate)) + 
+  geom_point() +
+  geom_smooth(col ="blue", se=FALSE)+
+  labs(x = "Proportion aged 16-25", y = "Death Rate",
+       title = "Death rate and propotion of younger adults with loess method")
+
+ggplot(covid5, aes(x = age25, y = death_rate)) + 
+  geom_point() + 
+  geom_smooth(col ="blue", se=FALSE,method="gam")+
+labs(x = "Proportion aged 16-25", y = "Death Rate",
+     title = "Death rate and propotion of younger adults with gam method")
+
+
+ggplot(covid5, aes(x = risk, y = death_rate)) + 
+  geom_point() +
+  geom_smooth(col ="green", se=FALSE)+
+  labs(x = "Proportion of aged 65+ among all the risky adults", y = "Death Rate",
+       title = "Death rate and share of aged 65+ at risk with loess method")
+
+ggplot(covid5, aes(x = risk, y = death_rate)) + 
+  geom_point() +
+  geom_smooth(col ="green", se=FALSE,method="gam")+
+  labs(x = "Proportion of aged 65+ among all the risky adults", y = "Death Rate",
+       title = "Death rate and share of aged 65+ at risk with gam method")
+
+
+# Try the plot at different dates and shows how the curve varies
+
+# First, clean the data 
+covid10=covid1%>%filter(date=="2020-05-01"|date=="2020-03-15"|date=="2020-04-01"|date=="2020-04-15")%>%left_join(seniors,by=c("fips"="STATEFIP"))%>%mutate(date=as.factor(date))
+covid11=covid10%>%left_join(kff,by="state_name")
+
+ggplot(covid11, aes(x = risk, y = death_rate, color = date)) + 
+  geom_point() +
+  geom_smooth(se=FALSE)+
+  labs(x = "Proportion of aged 65+ among all the risky adults", y = "Death Rate",
+       title = "Death rate and Proportion of aged 65+ adults at risk in different dates")
+
+ggplot(covid10, aes(x = old, y = death_rate, color = date)) + 
+  geom_point() +
+  geom_smooth(se=FALSE)+
+  labs(x = "Proportion of aged 65 or older", y = "Death Rate",
+       title = "Death rate and propotion of older people in different dates")
+
+# Compare the death rate in different regions including west, midwest, northeast, south region
+
+# First Process the data
+covid12=covid1[order(covid1$date,decreasing=TRUE),]
+covid12=covid12[1:612,]
+# Load the data set which contains the region in order to compare
+library(maps)
+sf=state.fips
+covid13=covid12%>%left_join(seniors,by=c("fips"="STATEFIP"))
+covid13=covid13%>%left_join(sf,by="fips")%>%mutate(region=as.factor(region))
+covid13=covid13[!is.na(covid13$region),]
+ggplot(covid13, aes(x = old, y = death_rate, color = region)) + 
+  geom_point() +
+  geom_smooth(se=FALSE)+
+  labs(x = "Proportion of aged 65 or older", y = "Death Rate",
+       title = "Death rate and propotion of older people in different regions")+
+  scale_colour_manual(labels = c("northeast", "midwest","south","West"),values = c("darkblue", "red","purple","green"))
+```
+
+
+
